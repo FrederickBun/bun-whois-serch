@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { CopyIcon, DownloadIcon } from "lucide-react";
+import { RiFileCopyLine, RiDownloadLine } from "@remixicon/react";
 import { TextArea } from "@/components/ui/textarea";
 import React from "react";
 import { cn, useClipboard, useSaver } from "@/lib/utils";
@@ -36,18 +36,26 @@ export default function RichTextarea({
         <Button
           variant={`outline`}
           size={`icon-sm`}
-          className={cn(`mr-1`, disableCopyAction && `hidden`)}
+          className={cn(
+            `mr-1 text-muted-foreground transition hover:text-primary`,
+            disableCopyAction && `hidden`,
+          )}
           onClick={() => copy(displayValue)}
+          tapEnabled
         >
-          <CopyIcon className={`w-3 h-3`} />
+          <RiFileCopyLine className={`w-3.5 h-3.5`} />
         </Button>
         <Button
           variant={`outline`}
           size={`icon-sm`}
           onClick={() => save(saveFileName || "text.txt", displayValue)}
-          className={cn(disableSaveAction && `hidden`)}
+          className={cn(
+            `text-muted-foreground transition hover:text-primary`,
+            disableSaveAction && `hidden`,
+          )}
+          tapEnabled
         >
-          <DownloadIcon className={`w-3 h-3`} />
+          <RiDownloadLine className={`w-3.5 h-3.5`} />
         </Button>
       </div>
       <TextArea rows={10} readOnly={true} value={displayValue} />

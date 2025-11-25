@@ -1,8 +1,8 @@
-import { lookupWhois } from "@/lib/whois/lookup";
+import { lookupWhoisWithCache } from "@/lib/whois/lookup";
 import {
   cleanDomainQuery,
   cn,
-  isEnter,
+  getWindowHref,
   toReadableISODate,
   toSearchURI,
   useClipboard,
@@ -12,19 +12,27 @@ import { Input } from "@/components/ui/input";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
-  Camera,
-  CopyIcon,
-  CornerDownRight,
-  ExternalLink,
-  Link2,
-  Loader2,
-  Search,
-  Send,
-  ShieldIcon,
-  ShieldOffIcon,
-  ShieldQuestionIcon,
-  Unlink2,
-} from "lucide-react";
+  RiCameraLine,
+  RiFileCopyLine,
+  RiExternalLinkLine,
+  RiLinkM,
+  RiBarChartBoxAiFill,
+  RiShareLine,
+  RiShieldLine,
+  RiQuestionFill,
+  RiShieldKeyholeLine,
+  RiLinkUnlink,
+  RiTwitterXLine,
+  RiFacebookFill,
+  RiRedditLine,
+  RiWhatsappLine,
+  RiTelegramLine,
+  RiArrowLeftSLine,
+  RiLinksLine,
+  RiTimeLine,
+  RiExchangeDollarFill,
+  RiBillLine,
+} from "@remixicon/react";
 import {
   Drawer,
   DrawerClose,
@@ -36,17 +44,20 @@ import {
   DrawerTrigger,
 } from "@/components/ui/drawer";
 import React, { useEffect, useMemo } from "react";
-import { addHistory } from "@/lib/history";
+import { addHistory, detectQueryType } from "@/lib/history";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { VERSION } from "@/lib/env";
 import { WhoisAnalyzeResult, WhoisResult } from "@/lib/whois/types";
 import Icon from "@/components/icon";
 import { useImageCapture } from "@/lib/image";
 import ErrorArea from "@/components/items/error-area";
 import RichTextarea from "@/components/items/rich-textarea";
 import InfoText from "@/components/items/info-text";
+import Clickable from "@/components/motion/clickable";
+import { SearchBox } from "@/components/search_box";
+import { useTranslation } from "@/lib/i18n";
+import { motion } from "framer-motion";
 
 type Props = {
   data: WhoisResult;
@@ -60,7 +71,7 @@ export async function getServerSideProps(context: NextPageContext) {
 
   return {
     props: {
-      data: await lookupWhois(target),
+      data: await lookupWhoisWithCache(target),
       target,
     },
   };
@@ -73,26 +84,28 @@ type ResultTableProps = {
 
 function getDnssecIcon(dnssec?: string) {
   if (!dnssec) {
-    return <ShieldQuestionIcon />;
+    return <RiShieldKeyholeLine />;
   }
   const key = dnssec.toLowerCase();
 
   switch (key) {
     case "unsigned":
-      return <ShieldOffIcon />;
+      return <RiQuestionFill />;
     case "signed":
-      return <ShieldIcon />;
+      return <RiShieldLine />;
     default:
-      return <ShieldQuestionIcon />;
+      return <RiShieldKeyholeLine />;
   }
 }
 
 function ResultTable({ result, target }: ResultTableProps) {
+  const { t } = useTranslation();
   const Row = ({
     name,
     value,
     children,
     hidden,
+    badge,
     likeLink,
   }: {
     name: string;
@@ -100,6 +113,7 @@ function ResultTable({ result, target }: ResultTableProps) {
     hidden?: boolean;
     children?: React.ReactNode;
     likeLink?: boolean;
+    badge?: React.ReactNode;
   }) =>
     !hidden && (
       <tr>
@@ -110,7 +124,7 @@ function ResultTable({ result, target }: ResultTableProps) {
         </td>
         <td
           className={cn(
-            `py-1 pl-2 text-left text-primary whitespace-pre-wrap break-all`,
+            `py-1 pl-2 text-left text-primary whitespace-pre-wrap break-all flex items-center`,
             likeLink && `cursor-pointer hover:underline`,
           )}
           onClick={() => {
@@ -125,6 +139,7 @@ function ResultTable({ result, target }: ResultTableProps) {
         >
           {value}
           {children}
+          {badge}
         </td>
       </tr>
     );
@@ -156,7 +171,7 @@ function ResultTable({ result, target }: ResultTableProps) {
             href={status.url}
             key={index}
             target={`_blank`}
-            className={`inline-flex flex-row whitespace-nowrap flex-nowrap items-center m-0.5 cursor-pointer px-1 py-0.5 border rounded text-xs`}
+            className={`inline-flex group flex-row whitespace-nowrap flex-nowrap items-center m-0.5 cursor-pointer px-1.5 py-0.5 border rounded text-xs`}
             onClick={(e) => {
               if (status.url === "expand") {
                 e.preventDefault();
@@ -168,8 +183,8 @@ function ResultTable({ result, target }: ResultTableProps) {
           >
             {status.url !== "expand" && (
               <Icon
-                icon={status.url ? <Link2 /> : <Unlink2 />}
-                className={`w-3 h-3 mr-1 shrink-0`}
+                icon={status.url ? <RiLinkM /> : <RiLinkUnlink />}
+                className={`w-3 h-3 mr-1 shrink-0 text-muted-foreground transition group-hover:text-primary`}
               />
             )}
             {status.status}
@@ -186,21 +201,35 @@ function ResultTable({ result, target }: ResultTableProps) {
     result && (
       <table className={`w-full text-sm mb-4 whitespace-pre-wrap`}>
         <tbody>
-          <Row name={`域名/IP`} value={result.domain || target.toUpperCase()} />
-          <Row name={`状态`} value={<StatusComp />} />
           <Row
-            name={`注册商`}
+            name={t("whois_fields.name")}
+            value={result.domain || target.toUpperCase()}
+            badge={
+              result.remainingDays !== null &&
+              result.remainingDays <= 60 && (
+                <Badge
+                  className="ml-1.5 py-0.25 px-1.5 rounded border-dashed font-normal"
+                  variant="outline"
+                >
+                  {t("expiring_soon")}
+                </Badge>
+              )
+            }
+          />
+          <Row name={t("whois_fields.status")} value={<StatusComp />} />
+          <Row
+            name={t("whois_fields.registrar")}
             value={result.registrar}
             hidden={!result.registrar || result.registrar === "Unknown"}
           />
           <Row
-            name={`注册商网址`}
+            name={t("whois_fields.registrar_url")}
             value={result.registrarURL}
             likeLink
             hidden={!result.registrarURL || result.registrarURL === "Unknown"}
           />
           <Row
-            name={`IANA ID`}
+            name={t("whois_fields.iana_id")}
             value={result.ianaId}
             hidden={!result.ianaId || result.ianaId === "N/A"}
           >
@@ -210,81 +239,80 @@ function ResultTable({ result, target }: ResultTableProps) {
               target={`_blank`}
             >
               <Button variant={`ghost`} size={`icon-xs`}>
-                <ExternalLink className={`w-3 h-3`} />
+                <RiExternalLinkLine className={`w-3 h-3`} />
               </Button>
             </Link>
           </Row>
 
           {/* IP Whois Only */}
           <Row
-            name={`CIDR`}
+            name={t("whois_fields.cidr")}
             value={result.cidr}
             hidden={!result.cidr || result.cidr === "Unknown"}
           />
           <Row
-            name={`网络类型`}
+            name={t("whois_fields.net_type")}
             value={result.netType}
             hidden={!result.netType || result.netType === "Unknown"}
           />
           <Row
-            name={`网络名称`}
+            name={t("whois_fields.net_name")}
             value={result.netName}
             hidden={!result.netName || result.netName === "Unknown"}
           />
           <Row
-            name={`INet Num`}
+            name={t("whois_fields.inet_num")}
             value={result.inetNum}
             hidden={!result.inetNum || result.inetNum === "Unknown"}
           />
           <Row
-            name={`INet6 Num`}
+            name={t("whois_fields.inet6_num")}
             value={result.inet6Num}
             hidden={!result.inet6Num || result.inet6Num === "Unknown"}
           />
           <Row
-            name={`Net Range`}
+            name={t("whois_fields.net_range")}
             value={result.netRange}
             hidden={!result.netRange || result.netRange === "Unknown"}
           />
           <Row
-            name={`Origin AS`}
+            name={t("whois_fields.origin_as")}
             value={result.originAS}
             hidden={!result.originAS || result.originAS === "Unknown"}
           />
           {/* IP Whois Only End */}
 
           <Row
-            name={`Whois 服务器`}
+            name={t("whois_fields.whois_server")}
             value={result.whoisServer}
             likeLink
             hidden={!result.whoisServer || result.whoisServer === "Unknown"}
           />
-
           <Row
-            name={`创建时间`}
+            name={t("whois_fields.creation_date")}
             value={toReadableISODate(result.creationDate)}
             hidden={!result.creationDate || result.creationDate === "Unknown"}
           >
-            <InfoText content={`UTC+8`} />
+            <InfoText content={t("utc")} />
           </Row>
           <Row
-            name={`更新时间`}
+            name={t("whois_fields.updated_date")}
             value={toReadableISODate(result.updatedDate)}
             hidden={!result.updatedDate || result.updatedDate === "Unknown"}
           >
-            <InfoText content={`UTC+8`} />
+            <InfoText content={t("utc")} />
           </Row>
           <Row
-            name={`截止时间`}
+            name={t("whois_fields.expiration_date")}
             value={toReadableISODate(result.expirationDate)}
             hidden={
               !result.expirationDate || result.expirationDate === "Unknown"
             }
           >
-            <InfoText content={`UTC+8`} />
+            <InfoText content={t("utc")} />
           </Row>
           <Row
-            name={`注册组织`}
+            name={t("whois_fields.registrant_organization")}
             value={result.registrantOrganization}
             hidden={
               !result.registrantOrganization ||
@@ -292,7 +320,7 @@ function ResultTable({ result, target }: ResultTableProps) {
             }
           />
           <Row
-            name={`注册地`}
+            name={t("whois_fields.registrant_province")}
             value={result.registrantProvince}
             hidden={
               !result.registrantProvince ||
@@ -300,7 +328,7 @@ function ResultTable({ result, target }: ResultTableProps) {
             }
           />
           <Row
-            name={`注册国家`}
+            name={t("whois_fields.registrant_country")}
             value={result.registrantCountry}
             hidden={
               !result.registrantCountry ||
@@ -308,32 +336,32 @@ function ResultTable({ result, target }: ResultTableProps) {
             }
           />
           <Row
-            name={`注册电话`}
+            name={t("whois_fields.registrant_phone")}
             value={result.registrantPhone}
             hidden={
               !result.registrantPhone || result.registrantPhone === "Unknown"
             }
           >
-            <InfoText content={`Abuse`} />
+            <InfoText content={t("abuse")} />
           </Row>
           <Row
-            name={`注册邮件`}
+            name={t("whois_fields.registrant_email")}
             value={result.registrantEmail}
             hidden={
               !result.registrantEmail || result.registrantEmail === "Unknown"
             }
           />
           <Row
-            name={`DNS名称服务器`}
+            name={t("whois_fields.name_servers")}
             value={
               <div className={`flex flex-col`}>
                 {result.nameServers.map((ns, index) => (
                   <div
                     key={index}
-                    className={`text-secondary text-xs border cursor-pointer rounded-md px-1 py-0.5 mt-0.5 w-fit inline-flex flex-row items-center`}
+                    className={`text-secondary hover:text-primary transition duration-500 text-xs border cursor-pointer rounded-md px-1 py-0.5 mt-0.5 w-fit inline-flex flex-row items-center`}
                     onClick={() => copy(ns)}
                   >
-                    <CopyIcon className={`w-2.5 h-2.5 mr-1`} />
+                    <RiFileCopyLine className={`w-2.5 h-2.5 mr-1`} />
                     {ns}
                   </div>
                 ))}
@@ -341,7 +369,11 @@ function ResultTable({ result, target }: ResultTableProps) {
             }
             hidden={result.nameServers.length === 0}
           />
-          <Row name={`DNS安全扩展`} value={result.dnssec} hidden={!result.dnssec}>
+          <Row
+            name={t("whois_fields.dnssec")}
+            value={result.dnssec}
+            hidden={!result.dnssec}
+          >
             <Icon
               className={`inline w-3.5 h-3.5 ml-1.5`}
               icon={getDnssecIcon(result.dnssec)}
@@ -355,6 +387,7 @@ function ResultTable({ result, target }: ResultTableProps) {
 
 const ResultComp = React.forwardRef<HTMLDivElement, Props>(
   ({ data, target, isCapture }: Props, ref) => {
+    const { t } = useTranslation();
     const copy = useClipboard();
 
     const captureObject = React.useRef<HTMLDivElement>(null);
@@ -362,64 +395,241 @@ const ResultComp = React.forwardRef<HTMLDivElement, Props>(
 
     const { status, result, error, time } = data;
 
+    const current = getWindowHref();
+
     return (
       <div
         className={cn(
-          "w-full h-fit mt-4",
+          "w-full h-fit mt-2",
           isCapture &&
             "flex flex-col items-center m-0 p-4 w-full bg-background",
         )}
       >
+        {!isCapture && (
+          <div
+            className={`inline-flex flex-row items-center w-full h-fit select-none mb-1 space-x-2`}
+          >
+            {result && result?.domainAge !== null && (
+              <div className="flex items-center space-x-1.5">
+                <div className="px-2 py-0.5 rounded-md border bg-background flex items-center space-x-1">
+                  <RiTimeLine className="w-3 h-3 text-muted-foreground shrink-0 hidden sm:block" />
+                  <span className="text-[11px] sm:text-xs font-normal text-muted-foreground">
+                    {result.domainAge === 0 ? "<1" : result.domainAge}{" "}
+                    {t("years")}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {result?.registerPrice && (
+              <Link
+                target="_blank"
+                href={result.registerPrice.externalLink}
+                className="px-2 py-0.5 rounded-md border bg-background flex items-center space-x-1 cursor-pointer hover:border-muted-foreground/50 transition-colors duration-300"
+              >
+                <RiBillLine className="w-3 h-3 text-muted-foreground shrink-0 hidden sm:block" />
+                <span
+                  className={cn(
+                    "text-[11px] sm:text-xs font-normal text-muted-foreground break-words",
+                    result.registerPrice.isPremium && "text-red-500",
+                  )}
+                >
+                  {t("register_price")}
+                  {result.registerPrice.new}{" "}
+                  {result.registerPrice.currency.toUpperCase()}
+                </span>
+              </Link>
+            )}
+
+            {result?.renewPrice && (
+              <Link
+                href={result.renewPrice.externalLink}
+                target="_blank"
+                className="px-2 py-0.5 rounded-md border bg-background flex items-center space-x-1 cursor-pointer hover:border-muted-foreground/50 transition-colors duration-300"
+              >
+                <RiExchangeDollarFill className="w-3 h-3 text-muted-foreground shrink-0 hidden sm:block" />
+                <span
+                  className={
+                    "text-[11px] sm:text-xs font-normal text-muted-foreground break-words"
+                  }
+                >
+                  {t("renew_price")}
+                  {result.renewPrice.renew}{" "}
+                  {result.renewPrice.currency.toUpperCase()}
+                </span>
+              </Link>
+            )}
+
+            <div className={`flex-grow`} />
+            <Drawer>
+              <DrawerTrigger asChild>
+                <Button
+                  variant={`outline`}
+                  size={`icon-sm`}
+                  className={`transition duration-500 hover:border-muted-foreground shadow-sm`}
+                  tapEnabled
+                >
+                  <RiCameraLine className={`w-4 h-4 stroke-[1.5]`} />
+                </Button>
+              </DrawerTrigger>
+              <DrawerContent>
+                <DrawerHeader>
+                  <DrawerTitle
+                    className={`inline-flex items-center justify-center`}
+                  >
+                    <RiCameraLine className={`w-5 h-5 stroke-[1.5] mr-1.5`} />
+                    {t("capture")}
+                  </DrawerTitle>
+                  <DrawerClose />
+                </DrawerHeader>
+                <div className={`my-2`}>
+                  <ResultComp
+                    data={data}
+                    target={target}
+                    ref={captureObject}
+                    isCapture={true}
+                  />
+                </div>
+                <DrawerFooter>
+                  <Button
+                    variant={`outline`}
+                    onClick={() => capture(`whois-${target}`)}
+                    className={`flex flex-row items-center w-full max-w-[568px] mx-auto`}
+                    tapEnabled
+                  >
+                    <RiCameraLine className={`w-4 h-4 mr-2`} />
+                    {t("capture")}
+                  </Button>
+                </DrawerFooter>
+              </DrawerContent>
+            </Drawer>
+            <Drawer>
+              <DrawerTrigger asChild>
+                <Button
+                  variant={`outline`}
+                  size={`icon-sm`}
+                  className={`transition duration-500 hover:border-muted-foreground shadow-sm`}
+                  tapEnabled
+                >
+                  <RiShareLine className={`w-4 h-4 stroke-[1.5]`} />
+                </Button>
+              </DrawerTrigger>
+              <DrawerContent className={`w-full text-center`}>
+                <DrawerHeader>
+                  <DrawerTitle
+                    className={`inline-flex items-center justify-center`}
+                  >
+                    <RiShareLine className={`w-4 h-4 stroke-[1.5] mr-1.5`} />
+                    {t("share")}
+                  </DrawerTitle>
+                  <DrawerClose />
+                </DrawerHeader>
+                <DrawerDescription>
+                  <p className={`text-sm text-secondary`}>
+                    {t("share_description")}
+                  </p>
+                </DrawerDescription>
+
+                <div
+                  className={`flex flex-row items-center w-full max-w-[468px] mx-auto mt-4 justify-center space-x-2`}
+                >
+                  {/* twitter */}
+                  <Link
+                    href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(
+                      `Whois Lookup Result: ${target} - ${status ? "Success" : "Failed"}`,
+                    )}&url=${encodeURIComponent(current)}`}
+                    target={`_blank`}
+                  >
+                    <Button size={`icon-sm`} variant={`outline`} tapEnabled>
+                      <RiTwitterXLine className={`w-4 h-4`} />
+                    </Button>
+                  </Link>
+
+                  {/*  facebook */}
+                  <Link
+                    href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(
+                      current,
+                    )}`}
+                    target={`_blank`}
+                  >
+                    <Button size={`icon-sm`} variant={`outline`} tapEnabled>
+                      <RiFacebookFill className={`w-4 h-4`} />
+                    </Button>
+                  </Link>
+
+                  {/*  reddit */}
+                  <Link
+                    href={`https://reddit.com/submit?url=${encodeURIComponent(
+                      current,
+                    )}`}
+                    target={`_blank`}
+                  >
+                    <Button size={`icon-sm`} variant={`outline`} tapEnabled>
+                      <RiRedditLine className={`w-4 h-4`} />
+                    </Button>
+                  </Link>
+
+                  {/*  whatsapp */}
+                  <Link
+                    href={`https://api.whatsapp.com/send?text=${encodeURIComponent(
+                      current,
+                    )}`}
+                    target={`_blank`}
+                  >
+                    <Button size={`icon-sm`} variant={`outline`} tapEnabled>
+                      <RiWhatsappLine className={`w-4 h-4`} />
+                    </Button>
+                  </Link>
+
+                  {/*  telegram */}
+                  <Link
+                    href={`https://t.me/share/url?url=${encodeURIComponent(
+                      current,
+                    )}`}
+                    target={`_blank`}
+                  >
+                    <Button size={`icon-sm`} variant={`outline`} tapEnabled>
+                      <RiTelegramLine className={`w-4 h-4`} />
+                    </Button>
+                  </Link>
+                </div>
+                <DrawerFooter>
+                  <div
+                    className={`flex flex-row items-center w-full max-w-[468px] mx-auto`}
+                  >
+                    <Input
+                      className={`flex-grow border-r-0 rounded-r-none text-center`}
+                      value={current}
+                      readOnly
+                    />
+                    <Button
+                      size={`icon`}
+                      variant={`secondary`}
+                      onClick={() => copy(current)}
+                      className={`rounded-l-none`}
+                      tapEnabled
+                    >
+                      <RiFileCopyLine className={`w-4 h-4`} />
+                    </Button>
+                  </div>
+                </DrawerFooter>
+              </DrawerContent>
+            </Drawer>
+          </div>
+        )}
         <Card
           ref={ref}
-          className={cn("shadow", isCapture && "w-fit max-w-[768px]")}
+          className={cn(isCapture ? "w-full max-w-[568px]" : "shadow")}
         >
           <CardHeader>
             <CardTitle
-              className={`flex flex-row items-center text-lg md:text-xl`}
+              className={`flex flex-row items-center text-sm md:text-base`}
             >
-              查询结果
-              {!isCapture && (
-                <Drawer>
-                  <DrawerTrigger asChild>
-                    <Button
-                      variant={`outline`}
-                      size={`icon-sm`}
-                      className={`ml-2`}
-                    >
-                      <Camera className={`w-4 h-4`} />
-                    </Button>
-                  </DrawerTrigger>
-                  <DrawerContent>
-                    <DrawerHeader>
-                      <DrawerTitle>结果截图</DrawerTitle>
-                      <DrawerClose />
-                    </DrawerHeader>
-                    <div className={`my-2`}>
-                      <ResultComp
-                        data={data}
-                        target={target}
-                        ref={captureObject}
-                        isCapture={true}
-                      />
-                    </div>
-                    <DrawerFooter>
-                      <Button
-                        variant={`outline`}
-                        onClick={() => capture(`whois-${target}`)}
-                        className={`flex flex-row items-center w-full max-w-[768px] mx-auto`}
-                      >
-                        <Camera className={`w-4 h-4 mr-2`} />
-                        截取
-                      </Button>
-                    </DrawerFooter>
-                  </DrawerContent>
-                </Drawer>
-              )}
-              <div className={`flex-grow`} />
-              <Badge
-                className={`inline-flex max-w-36 md:max-w-64 flex-row items-center cursor-pointer ml-2 mr-1 select-none`}
+              <div
                 onClick={() => copy(target)}
+                className={cn(
+                  `inline-flex w-fit max-w-32 sm:max-w-64 flex-row items-center space-x-1 cursor-pointer select-none`,
+                )}
               >
                 <div
                   className={cn(
@@ -427,9 +637,22 @@ const ResultComp = React.forwardRef<HTMLDivElement, Props>(
                     status ? "bg-green-500" : "bg-red-500",
                   )}
                 />
-                <p className={`grow text-ellipsis overflow-hidden`}>{target}</p>
+
+                <p
+                  className={cn(
+                    `grow`,
+                    !isCapture && `text-ellipsis overflow-hidden`,
+                    isCapture && `text-ellipsis overflow-hidden`,
+                  )}
+                >
+                  {target}
+                </p>
+              </div>
+              <div className={`flex-grow`} />
+              <Badge className="mr-1">{detectQueryType(target)}</Badge>
+              <Badge variant={`outline`} className="border-dashed">
+                {time.toFixed(2)}s
               </Badge>
-              <Badge variant={`outline`}>{time.toFixed(2)}″</Badge>
             </CardTitle>
             <CardContent className={`w-full p-0`}>
               {!status ? (
@@ -439,108 +662,187 @@ const ResultComp = React.forwardRef<HTMLDivElement, Props>(
                   <ResultTable result={result} target={target} />
 
                   {!isCapture && (
-                    <RichTextarea
-                      className={`mt-2`}
-                      name={`原始 Whois 响应`}
-                      value={result?.rawWhoisContent}
-                      saveFileName={`${target.replace(/\./g, "-")}-whois.txt`}
-                    />
+                    <>
+                      {result?.rawRdapContent && (
+                        <RichTextarea
+                          className={`mt-2`}
+                          name={t("raw_rdap_response")}
+                          value={result.rawRdapContent}
+                          saveFileName={`${target.replace(/\./g, "-")}-rdap.json`}
+                        />
+                      )}
+                      {result?.rawWhoisContent && (
+                        <RichTextarea
+                          className={`mt-2`}
+                          name={t("raw_whois_response")}
+                          value={result.rawWhoisContent}
+                          saveFileName={`${target.replace(/\./g, "-")}-whois.txt`}
+                        />
+                      )}
+                    </>
                   )}
                 </div>
               )}
             </CardContent>
           </CardHeader>
         </Card>
+        {!isCapture && result && result.mozDomainAuthority !== -1 && (
+          <div className="mt-3 w-full">
+            <Card className="shadow-sm border bg-muted/10">
+              <CardHeader className="pb-4">
+                <CardTitle className="text-sm font-medium flex items-center space-x-2 w-full">
+                  <RiBarChartBoxAiFill className="w-4 h-4" />
+                  <span>{t("whois_fields.moz_stats")}</span>
+                  <Link
+                    href="https://moz.com/learn/seo/domain-authority"
+                    target="_blank"
+                    className="p-0.5 text-muted-foreground hover:text-primary transition-colors duration-300 !ml-auto flex-shrink-0"
+                  >
+                    <RiExternalLinkLine className="w-3.5 h-3.5" />
+                  </Link>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-3 gap-3">
+                  <div
+                    className={cn(
+                      "flex flex-col items-center rounded-lg p-3 bg-background border",
+                      result.mozDomainAuthority > 50 &&
+                        "bg-green-50/50 dark:bg-green-950/20 border-green-200 dark:border-green-800",
+                    )}
+                  >
+                    <span className="text-xs text-muted-foreground mb-1">
+                      Domain Authority
+                    </span>
+                    <span
+                      className={cn(
+                        "text-lg font-semibold",
+                        result.mozDomainAuthority > 50
+                          ? "text-green-600 dark:text-green-400"
+                          : "text-secondary",
+                      )}
+                    >
+                      {result.mozDomainAuthority}
+                    </span>
+                  </div>
+                  <div
+                    className={cn(
+                      "flex flex-col items-center rounded-lg p-3 bg-background border",
+                      result.mozPageAuthority > 50 &&
+                        "bg-green-50/50 dark:bg-green-950/20 border-green-200 dark:border-green-800",
+                    )}
+                  >
+                    <span className="text-xs text-muted-foreground mb-1">
+                      Page Authority
+                    </span>
+                    <span
+                      className={cn(
+                        "text-lg font-semibold",
+                        result.mozPageAuthority > 50
+                          ? "text-green-600 dark:text-green-400"
+                          : "text-secondary",
+                      )}
+                    >
+                      {result.mozPageAuthority}
+                    </span>
+                  </div>
+                  <div
+                    className={cn(
+                      "flex flex-col items-center rounded-lg p-3 bg-background border",
+                      result.mozSpamScore > 5 &&
+                        "bg-red-50/50 dark:bg-red-950/20 border-red-200 dark:border-red-800",
+                    )}
+                  >
+                    <span className="text-xs text-muted-foreground mb-1">
+                      Spam Score
+                    </span>
+                    <span
+                      className={cn(
+                        "text-lg font-semibold",
+                        result.mozSpamScore > 5
+                          ? "text-red-600 dark:text-red-400"
+                          : "text-green-600 dark:text-green-400",
+                      )}
+                    >
+                      {result.mozSpamScore}
+                    </span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
       </div>
     );
   },
 );
 
 export default function Lookup({ data, target }: Props) {
-  const [inputDomain, setInputDomain] = React.useState<string>(target);
+  const { t } = useTranslation();
   const [loading, setLoading] = React.useState<boolean>(false);
 
-  const goStage = (target: string) => {
+  const handleSearch = (query: string) => {
     setLoading(true);
-    window.location.href = toSearchURI(inputDomain);
+    window.location.href = toSearchURI(query);
   };
 
   useEffect(() => {
-    addHistory(target);
+    if (data.status) {
+      addHistory(target);
+    }
   }, []);
 
   return (
     <ScrollArea className={`w-full h-full`}>
       <main
         className={
-          "relative w-full min-h-full grid place-items-center px-4 pt-20 pb-6"
+          "relative w-full min-h-full grid place-items-center px-4 pb-6"
         }
       >
-        <div
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
           className={
-            "flex flex-col items-center w-full h-fit max-w-[568px] m-2"
+            "flex flex-col items-center w-full h-fit max-w-[568px] m-2 mt-4"
           }
         >
-          <h1
-            className={
-              "text-lg md:text-2xl lg:text-3xl font-bold flex flex-row items-center select-none"
-            }
+          <motion.div
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.5, delay: 0.1, ease: "easeOut" }}
+            className="w-full flex items-center justify-start"
           >
-            <Search
-              className={`w-4 h-4 md:w-6 md:h-6 mr-1 md:mr-1.5 shrink-0`}
+            <Link href="/">
+              <button className="flex items-center text-secondary hover:text-primary transition-colors text-xs duration-300">
+                <RiArrowLeftSLine className="w-4 h-4 mr-1" />
+                {t("back")}
+              </button>
+            </Link>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.5, delay: 0.2, ease: "easeOut" }}
+            className={"w-full mt-1.5"}
+          >
+            <SearchBox
+              initialValue={target}
+              onSearch={handleSearch}
+              loading={loading}
             />
-            Whois 查询
-          </h1>
-          <p className={"text-md text-center text-secondary"}>
-            请输入您需要查询的域名……
-          </p>
-          <div className={"relative flex flex-row items-center w-full mt-2"}>
-            <Input
-              className={`w-full text-center`}
-              placeholder={`输入域名或IP (e.g. google.com, 8.8.8.8)`}
-              value={inputDomain}
-              onChange={(e) => setInputDomain(e.target.value)}
-              onKeyDown={(e) => {
-                if (isEnter(e)) {
-                  goStage(inputDomain);
-                }
-              }}
-            />
-            <Button
-              size={`icon`}
-              variant={`outline`}
-              className={`absolute right-0 rounded-l-none`}
-              onClick={() => goStage(inputDomain)}
-            >
-              {loading ? (
-                <Loader2 className={`w-4 h-4 animate-spin`} />
-              ) : (
-                <Send className={`w-4 h-4`} />
-              )}
-            </Button>
-          </div>
-          <div
-            className={`flex items-center flex-row w-full text-xs mt-1.5 select-none text-secondary`}
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.4, ease: "easeOut" }}
+            className="w-full"
           >
-            <div className={`flex-grow`} />
-            <CornerDownRight className={`w-3 h-3 mr-1`} />
-            <p className={`px-1 py-0.5 border rounded-md`}>Enter</p>
-          </div>
-          <ResultComp data={data} target={target} />
-        </div>
-        <div
-          className={`mt-12 text-sm flex flex-row items-center font-medium text-muted-foreground select-none`}
-        >
-          Powered by{" "}
-          <Link
-            href={`https://github.com/BunDragon`}
-            target={`_blank`}
-            className={`text-primary underline underline-offset-2 mx-1`}
-          >
-            BunDragon
-          </Link>
-          <Badge variant={`outline`}>All service are online.</Badge>
-        </div>
+            <ResultComp data={data} target={target} />
+          </motion.div>
+        </motion.div>
       </main>
     </ScrollArea>
   );
